@@ -646,18 +646,45 @@ def compute_ports() -> list:
 
 def get_available_port_if_any(debug: bool) -> int:
     ports = compute_ports()
+
+    host_to_check = "localhost"
+    # if there is a file named /run/.containerenv, it means we are inside a podman
+    # container, so we need to bind to the podman host
+    if os.path.exists("/run/.containerenv"):
+        host_to_check = "host.containers.internal"
+    elif os.path.exists("/.dockerenv"):
+        # docker case
+        host_to_check = "host.docker.internal"
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         chosen_port = 0
         for target_port in ports:
             if debug:
                 print(f"Checking if {target_port} is available")
-            try:
-                s.bind(('localhost', target_port))
-            except OSError:
-                continue
+            if host_to_check == 'localhost':
+                try:
+                    s.bind(('localhost', target_port))
+                except OSError:
+                    continue
+                else:
+                    chosen_port = target_port
+                    break
             else:
-                chosen_port = target_port
-                break
+                # In this case we won't be able to bind on
+                # the host socket but we can try to connect
+                # apply a short timeout to avoid blocking
+                s.settimeout(1)
+                try:
+                    result = s.connect_ex((host_to_check, target_port))
+                    if debug:
+                        print(f"connect result {result} for port {target_port}")
+                    if result != 0:
+                        # Assume available
+                        chosen_port = target_port
+                        break
+                except socket.error:
+                    print(f"Socket error: {target_port}")
+                    continue  # If connection fails for any reason, try next port
         return chosen_port
 
 
